@@ -1,8 +1,7 @@
-import type { Database } from '@/server/db'
-
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
+import { type Database } from '@/server/db'
 import { FriendshipStatusSchema } from '@/utils/server/friendship-schemas'
 import { protectedProcedure } from '@/server/trpc/procedures'
 import { router } from '@/server/trpc/router'
@@ -39,37 +38,90 @@ export const myFriendRouter = router({
          * Documentation references:
          *  - https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html#innerJoin
          */
-        conn
-          .selectFrom('users as friends')
-          .innerJoin('friendships', 'friendships.friendUserId', 'friends.id')
-          .innerJoin(
-            userTotalFriendCount(conn).as('userTotalFriendCount'),
-            'userTotalFriendCount.userId',
-            'friends.id'
+        {
+          const mutualsCte = conn.with('mutuals', (db) =>
+            db
+              .selectFrom('friendships as f1')
+              .innerJoin(
+                'friendships as f2',
+                'f1.friendUserId',
+                'f2.friendUserId'
+              )
+              .where('f1.userId', '=', ctx.session.userId)
+              .where('f2.userId', '=', input.friendUserId)
+              .where(
+                'f1.status',
+                '=',
+                FriendshipStatusSchema.Values['accepted']
+              )
+              .where(
+                'f2.status',
+                '=',
+                FriendshipStatusSchema.Values['accepted']
+              )
+              .select(['f1.friendUserId'])
           )
-          .where('friendships.userId', '=', ctx.session.userId)
-          .where('friendships.friendUserId', '=', input.friendUserId)
-          .where(
-            'friendships.status',
-            '=',
-            FriendshipStatusSchema.Values['accepted']
-          )
-          .select([
-            'friends.id',
-            'friends.fullName',
-            'friends.phoneNumber',
-            'totalFriendCount',
-          ])
-          .executeTakeFirstOrThrow(() => new TRPCError({ code: 'NOT_FOUND' }))
-          .then(
-            z.object({
+
+          const mainResult = await mutualsCte
+            .selectFrom('users as friends')
+            .innerJoin('friendships', 'friendships.friendUserId', 'friends.id')
+            .innerJoin(
+              userTotalFriendCount(conn).as('userTotalFriendCount'),
+              'userTotalFriendCount.userId',
+              'friends.id'
+            )
+            .where('friendships.userId', '=', ctx.session.userId)
+            .where('friendships.friendUserId', '=', input.friendUserId)
+            .where(
+              'friendships.status',
+              '=',
+              FriendshipStatusSchema.Values['accepted']
+            )
+            .select([
+              'friends.id',
+              'friends.fullName',
+              'friends.phoneNumber',
+              'totalFriendCount',
+            ])
+            .groupBy([
+              'friends.id',
+              'friends.fullName',
+              'friends.phoneNumber',
+              'totalFriendCount',
+            ])
+            .executeTakeFirstOrThrow(() => new TRPCError({ code: 'NOT_FOUND' }))
+          const mutualCountRow = await mutualsCte
+            .selectFrom('mutuals')
+            .select((eb) => eb.fn.count('friendUserId').as('mutualFriendCount'))
+            .executeTakeFirst()
+
+          const mutualFriendList = await mutualsCte
+            .selectFrom('mutuals')
+            .innerJoin('users', 'users.id', 'mutuals.friendUserId')
+            .select(['users.id', 'users.fullName', 'users.phoneNumber'])
+            .execute()
+
+          return z
+            .object({
               id: IdSchema,
               fullName: NonEmptyStringSchema,
               phoneNumber: NonEmptyStringSchema,
               totalFriendCount: CountSchema,
               mutualFriendCount: CountSchema,
-            }).parse
-          )
+              mutualFriendList: z.array(
+                z.object({
+                  id: IdSchema,
+                  fullName: NonEmptyStringSchema,
+                  phoneNumber: NonEmptyStringSchema,
+                })
+              ),
+            })
+            .parse({
+              ...mainResult,
+              mutualFriendCount: Number(mutualCountRow?.mutualFriendCount ?? 0),
+              mutualFriendList,
+            })
+        }
       )
     }),
 })
