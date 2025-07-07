@@ -65,6 +65,24 @@ export const friendshipRequestRouter = router({
     .use(canSendFriendshipRequest)
     .input(SendFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .deleteFrom('friendships')
+        .where((eb) =>
+          eb.and([
+            eb.or([
+              eb.and([
+                eb('userId', '=', ctx.session.userId),
+                eb('friendUserId', '=', input.friendUserId),
+              ]),
+              eb.and([
+                eb('userId', '=', input.friendUserId),
+                eb('friendUserId', '=', ctx.session.userId),
+              ]),
+            ]),
+            eb('status', '=', FriendshipStatusSchema.Values['declined']),
+          ])
+        )
+        .execute()
       /**
        * Question 3: Fix bug
        *
@@ -93,37 +111,121 @@ export const friendshipRequestRouter = router({
     .use(canAnswerFriendshipRequest)
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.transaction().execute(async (t) => {
-        /**
-         * Question 1: Implement api to accept a friendship request
-         *
-         * When a user accepts a friendship request, we need to:
-         *  1. Update the friendship request to have status `accepted`
-         *  2. Create a new friendship request record with the opposite user as the friend
-         *
-         * The end result that we want will look something like this
-         *
-         *  | userId | friendUserId | status   |
-         *  | ------ | ------------ | -------- |
-         *  | 1      | 2            | accepted |
-         *  | 2      | 1            | accepted |
-         *
-         * Instructions:
-         *  - Your answer must be inside this transaction code block
-         *  - Run `yarn test` to verify your answer
-         *
-         * Documentation references:
-         *  - https://kysely-org.github.io/kysely/classes/Transaction.html#transaction
-         *  - https://kysely-org.github.io/kysely/classes/Kysely.html#insertInto
-         *  - https://kysely-org.github.io/kysely/classes/Kysely.html#updateTable
-         */
-      })
+      const record = await ctx.db
+        .selectFrom('friendships')
+        .select(['userId', 'friendUserId'])
+        .where('userId', '=', ctx.session.userId)
+        .where('friendUserId', '=', input.friendUserId)
+        .execute()
+      if (record.length === 0) {
+        return await ctx.db.transaction().execute(async (t) => {
+          await t
+            .updateTable('friendships')
+            .set({ status: FriendshipStatusSchema.Values['accepted'] })
+            .where('userId', '=', input.friendUserId)
+            .where('friendUserId', '=', ctx.session.userId)
+            .execute()
+          await t
+            .insertInto('friendships')
+            .values({
+              userId: ctx.session.userId,
+              friendUserId: input.friendUserId,
+              status: FriendshipStatusSchema.Values['accepted'],
+            })
+            .execute()
+        })
+      } else {
+        return await ctx.db.transaction().execute(async (t) => {
+          await t
+            .updateTable('friendships')
+            .set({ status: FriendshipStatusSchema.Values['accepted'] })
+            .where((eb) =>
+              eb.or([
+                eb.and([
+                  eb('userId', '=', ctx.session.userId),
+                  eb('friendUserId', '=', input.friendUserId),
+                ]),
+                eb.and([
+                  eb('userId', '=', input.friendUserId),
+                  eb('friendUserId', '=', ctx.session.userId),
+                ]),
+              ])
+            )
+            .execute()
+        })
+      }
+      /**
+       * Question 1: Implement api to accept a friendship request
+       *
+       * When a user accepts a friendship request, we need to:
+       *  1. Update the friendship request to have status `accepted`
+       *  2. Create a new friendship request record with the opposite user as the friend
+       *
+       * The end result that we want will look something like this
+       *
+       *  | userId | friendUserId | status   |
+       *  | ------ | ------------ | -------- |
+       *  | 1      | 2            | accepted |
+       *  | 2      | 1            | accepted |
+       *
+       * Instructions:
+       *  - Your answer must be inside this transaction code block
+       *  - Run `yarn test` to verify your answer
+       *
+       * Documentation references:
+       *  - https://kysely-org.github.io/kysely/classes/Transaction.html#transaction
+       *  - https://kysely-org.github.io/kysely/classes/Kysely.html#insertInto
+       *  - https://kysely-org.github.io/kysely/classes/Kysely.html#updateTable
+       */
     }),
 
   decline: procedure
     .use(canAnswerFriendshipRequest)
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
+      const record = await ctx.db
+        .selectFrom('friendships')
+        .select(['userId', 'friendUserId'])
+        .where('userId', '=', ctx.session.userId)
+        .where('friendUserId', '=', input.friendUserId)
+        .execute()
+      if (record.length === 0) {
+        return await ctx.db.transaction().execute(async (t) => {
+          await t
+            .updateTable('friendships')
+            .set({ status: FriendshipStatusSchema.Values['declined'] })
+            .where('userId', '=', input.friendUserId)
+            .where('friendUserId', '=', ctx.session.userId)
+            .execute()
+          await t
+            .insertInto('friendships')
+            .values({
+              userId: ctx.session.userId,
+              friendUserId: input.friendUserId,
+              status: FriendshipStatusSchema.Values['declined'],
+            })
+            .execute()
+        })
+      } else {
+        return await ctx.db.transaction().execute(async (t) => {
+          await t
+            .updateTable('friendships')
+            .set({ status: FriendshipStatusSchema.Values['declined'] })
+            .where((eb) =>
+              eb.or([
+                eb.and([
+                  eb('userId', '=', ctx.session.userId),
+                  eb('friendUserId', '=', input.friendUserId),
+                ]),
+                eb.and([
+                  eb('userId', '=', input.friendUserId),
+                  eb('friendUserId', '=', ctx.session.userId),
+                ]),
+              ])
+            )
+            .execute()
+        })
+      }
       /**
        * Question 2: Implement api to decline a friendship request
        *
